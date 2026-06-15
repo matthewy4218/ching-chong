@@ -1,37 +1,29 @@
 import { createShuffledDeck, getCardValue, getCardPower, shuffle} from './deck.js';
 
-const rooms = {}; // will hold all active game rooms, keyed by room code. Each room has {roomCode, players, deck, discardPile, currentTurn, phase, knockedBy, cardCount}
+const rooms = {};
 
 function generateRoomCode() {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
     let code = '';
     for (let i = 0; i < 4; i++) {
-        code += chars.charAt(Math.floor(Math.random() * chars.length)); // random code generator
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     return code;
 }
 
 export function createRoom(hostId, hostName, cardCount) {
     let code = generateRoomCode();
-    while(rooms[code]) code = generateRoomCode(); //exits once unique code is generated
+    while(rooms[code]) code = generateRoomCode();
 
     rooms[code] = {
         roomCode: code,
-        players: [
-            {
-                id: hostId,
-                name: hostName,
-                hand: [],
-                hasKnocked: false,
-            }
-        ],
+        players: [{ id: hostId, name: hostName, hand: [], hasKnocked: false }],
         deck: [],
         discardPile: [],
         currentTurn: 0,
         phase: 'lobby',
         knockedBy: null,
-        cardCount: cardCount || 4, // defaults to 4
-
+        cardCount: cardCount || 4,
     };
     return rooms[code];
 }
@@ -41,18 +33,10 @@ export function joinRoom(roomCode, playerId, playerName) {
     if (!room) return { error: 'Room not found' };
     if (room.phase !== 'lobby') return { error: 'Game already started' };
     if (room.players.length >= 6) return { error: 'Room is full' };
-
-    room.players.push({
-        id: playerId,
-        name: playerName,
-        hand: [],
-        hasKnocked: false,
-    }); //adds new player to room's player list
+    room.players.push({ id: playerId, name: playerName, hand: [], hasKnocked: false });
     return room;
 }
 
-
-// deals cards to players, moves to peek phase
 export function startGame(roomCode) {
     const room = rooms[roomCode];
     if (!room) return { error: 'Room not found' };
@@ -63,7 +47,10 @@ export function startGame(roomCode) {
     for (const player of room.players) {
         player.hand = [];
         for (let i = 0; i < cardCount; i++) {
-            player.hand.push(deck.pop()); //adds card to player's hand and removes it from the deck
+            // BUG3 FIX: ensure all dealt cards are face down
+            const card = deck.pop();
+            card.faceUp = false;
+            player.hand.push(card);
         }
     }
 
@@ -71,36 +58,30 @@ export function startGame(roomCode) {
     room.discardPile = [];
     room.phase = 'peek';
     room.peeksDone = {};
-
     return room;
 }
 
 export function peekCards(roomCode, playerId, cardIndices) {
     const room = rooms[roomCode];
-    const player = room.players.find(p => p.id === playerId); // find the player in the room's player list
-
+    const player = room.players.find(p => p.id === playerId);
     if (!player) return {error: 'Player not found'};
 
-    const half  = room.cardCount / 2;
+    const half = room.cardCount / 2;
     if (cardIndices.length !== half) return {error: `Must peek at exactly ${half} cards`};
 
-    room.peeksDone[playerId] = true;
+    room.peeksDone[playerId] = cardIndices;
 
-    if (Object.keys(room.peeksDone).length === room.players.length) {
-        room.phase = 'playing';
-        room.currentTurn = 0;
-    } // allows game to advance to playing phase once all players have done their peek
+    const allDone = Object.keys(room.peeksDone).length === room.players.length;
+    if (allDone) room.phase = 'revealing';
 
-    return {room, peekIndices: cardIndices };
+    return { room, peekIndices: cardIndices, allDone };
 }
 
 export function drawCard(roomCode, playerId) {
     const room = rooms[roomCode];
     const playerIndex = room.players.findIndex(p => p.id === playerId);
-
     if (playerIndex !== room.currentTurn) return {error: 'Not your turn'};
     if (room.deck.length === 0) reshuffleDeck(room);
-
     const drawnCard = room.deck.pop();
     return { room, drawnCard };
 }
@@ -108,36 +89,30 @@ export function drawCard(roomCode, playerId) {
 export function swapDrawnCard(roomCode, playerId, handIndex, drawnCard) {
     const room = rooms[roomCode];
     const player = room.players.find(p => p.id === playerId);
-    const discardedCard = player.hand[handIndex]; //player selects card to swap out
-    const power = getCardPower(discardedCard);
+    const discardedCard = player.hand[handIndex];
+    const power = getCardPower(drawnCard);
 
-    discardedCard.faceUp = true; // make sure discarded card isn't visible to other players
-    player.hand[handIndex] = drawnCard; //replaces selected card with drawn card
-    drawnCard.faceUp = false; //back in the player's hand, so face down
-
+    discardedCard.faceUp = true;   // going to discard pile — face up
+    player.hand[handIndex] = { ...drawnCard, faceUp: false }; // BUG3 FIX: always face down in hand
     room.discardPile.push(discardedCard);
     return { room, power, discardedCard };
 }
 
 export function discardDrawnCard(roomCode, drawnCard) {
-     const room = rooms[roomCode];
-     drawnCard.faceUp = true; //into face up pile, so everyone can see
-     room.discardPile.push(drawnCard);
-
-     const power = getCardPower(drawnCard);
-     return { room, power };
+    const room = rooms[roomCode];
+    const cardToDiscard = { ...drawnCard, faceUp: true }; // BUG3 FIX: explicit copy with faceUp true
+    room.discardPile.push(cardToDiscard);
+    const power = getCardPower(cardToDiscard);
+    return { room, power };
 }
 
-// 8,9 power
 export function peekOwnCard(roomCode, playerId, handIndex) {
     const room = rooms[roomCode];
     const player = room.players.find(p => p.id === playerId);
     const card = player.hand[handIndex];
-    // server sends card privately to player
-    return {room, card, handIndex};
+    return { room, card, handIndex };
 }
 
-// 10,J power
 export function peekOtherCard(roomCode, playerId, targetPlayerId, handIndex) {
     const room = rooms[roomCode];
     const target = room.players.find(p => p.id === targetPlayerId);
@@ -145,79 +120,112 @@ export function peekOtherCard(roomCode, playerId, targetPlayerId, handIndex) {
     return { room, card, targetPlayerId, handIndex };
 }
 
-// Q power
 export function swapBlind(roomCode, playerId, myIndex, targetPlayerId, theirIndex) {
     const room = rooms[roomCode];
     const player = room.players.find(p => p.id === playerId);
     const target = room.players.find(p => p.id === targetPlayerId);
 
-    const temp = player.hand[myIndex]; // temporary open card to hold the value during the swap
-    player.hand[myIndex] = target.hand[theirIndex]; //replaces player's card with target's card
-    target.hand[theirIndex] = temp; //replaces target's card with player's card
-
-    return {room};
+    const temp = player.hand[myIndex];
+    player.hand[myIndex] = { ...target.hand[theirIndex], faceUp: false }; // BUG3 FIX
+    target.hand[theirIndex] = { ...temp, faceUp: false };                  // BUG3 FIX
+    return { room };
 }
 
-// K power
 export function swapAndLook(roomCode, playerId, myIndex, targetPlayerId, theirIndex) {
     const room = rooms[roomCode];
     const player = room.players.find(p => p.id === playerId);
     const target = room.players.find(p => p.id === targetPlayerId);
 
     const temp = player.hand[myIndex];
-    player.hand[myIndex] = target.hand[theirIndex]; 
-    target.hand[theirIndex] = temp; 
+    player.hand[myIndex] = { ...target.hand[theirIndex], faceUp: false }; // BUG3 FIX
+    target.hand[theirIndex] = { ...temp, faceUp: false };                  // BUG3 FIX
 
-    const receivedCard = player.hand[myIndex]; // is now the card that was swapped from the target, so player can see it
-    return {room, receivedCard};
+    const receivedCard = player.hand[myIndex];
+    player.hand[myIndex] = {... receivedCard, faceUp: false};
+    return { room, receivedCard };
 }
 
-//cardRefs is {playerId, handIndex} pairs for the cards being matched
 export function attemptMatch(roomCode, playerId, cardRefs) {
     const room = rooms[roomCode];
     const topCard = room.discardPile[room.discardPile.length - 1];
     const targetValue = topCard.value;
- 
+
+    // snapshot cards BEFORE any mutation — record which owner each card belongs to
     const cards = cardRefs.map(ref => {
-        const player = room.players.find(p => p.id === ref.playerId);
+        const owner = room.players.find(p => p.id === ref.playerId);
         return {
-            card: player.hand[ref.handIndex],
+            card: owner.hand[ref.handIndex],
             playerId: ref.playerId,
-            handIndex: ref.handIndex
+            handIndex: ref.handIndex,
         };
     });
- 
-    const sum = cards.reduce((total, c) => total + c.card.value, 0); //sums values of selected cards (const cards)
- 
+
+    const sum = cards.reduce((total, c) => total + c.card.value, 0);
+    const attacker = room.players.find(p => p.id === playerId);
+
+    // ---- MISMATCH ----
+    // BUG2 FIX: cards from B return to B; attacker gets (# cards taken from others) + 1 penalty
     if (sum !== targetValue) {
-        // penalty: all attempted cards go to attacker plus one from deck
-        const attacker = room.players.find(p => p.id === playerId);
-        if (room.deck.length === 0) reshuffleDeck(room);
-        const penaltyCard = room.deck.pop();
-        penaltyCard.faceUp = false;
-        attacker.hand.push(penaltyCard);
- 
+        // group attempted cards by original owner
+        const byOwner = {};
         for (const c of cards) {
-            c.card.faceUp = false;
-            attacker.hand.push(c.card);
-            const owner = room.players.find(p => p.id === c.playerId);
-            owner.hand.splice(c.handIndex, 1);
-        } //adds all attempted cards to attacker's hand and removes them from their original owners' hands
- 
+            if (!byOwner[c.playerId]) byOwner[c.playerId] = [];
+            byOwner[c.playerId].push(c);
+        }
+
+        // return each card to its original owner, face down
+        // remove in reverse index order to avoid splice shifting issues
+        for (const ownerId in byOwner) {
+            const owner = room.players.find(p => p.id === ownerId);
+            const ownerCards = byOwner[ownerId].sort((a, b) => b.handIndex - a.handIndex);
+            for (const c of ownerCards) {
+                c.card.faceUp = false; // BUG3 FIX: always face down when returned
+                if (ownerId !== playerId) {
+                    // card was taken from someone else — it never left, just unselect it
+                    // (we haven't removed it yet)
+                } else {
+                    // attacker's own cards were selected — they stay in hand already
+                }
+            }
+        }
+
+        // count how many cards were taken from NON-attackers
+        let cardsFromOthers = 0;
+        for (const c of cards) {
+            if (c.playerId !== playerId) cardsFromOthers++;
+        }
+
+        // attacker gets penalty: one card per card taken from others + 1 extra
+        const penaltyCount = cardsFromOthers + 1;
+        for (let i = 0; i < penaltyCount; i++) {
+            if (room.deck.length === 0) reshuffleDeck(room);
+            const penaltyCard = room.deck.pop();
+            penaltyCard.faceUp = false; // BUG3 FIX
+            attacker.hand.push(penaltyCard);
+        }
+
         return { room, success: false, penalty: true };
     }
 
-    // success: move matched cards to discard pile
+    // ---- SUCCESS ----
+    // remove matched cards from owners' hands (reverse order per owner to avoid index shift)
+    const byOwner = {};
     for (const c of cards) {
-        c.card.faceUp = true;
-        room.discardPile.push(c.card);
-        const owner = room.players.find(p => p.id === c.playerId);
-        owner.hand.splice(c.handIndex, 1);
+        if (!byOwner[c.playerId]) byOwner[c.playerId] = [];
+        byOwner[c.playerId].push(c);
+    }
+    for (const ownerId in byOwner) {
+        const owner = room.players.find(p => p.id === ownerId);
+        const sorted = byOwner[ownerId].sort((a, b) => b.handIndex - a.handIndex);
+        for (const c of sorted) {
+            c.card.faceUp = true;
+            room.discardPile.push(c.card);
+            owner.hand.splice(c.handIndex, 1);
+        }
     }
 
-    // if any original owner's hand is now empty, they win
-    const ownerIds = [...new Set(cards.map(c => c.playerId))];
-    for (const ownerId of ownerIds) {
+    // check if any owner's hand is now empty — instant win
+    for (const ownerId in byOwner) {
         const owner = room.players.find(p => p.id === ownerId);
         if (owner.hand.length === 0) {
             room.phase = 'ended';
@@ -225,33 +233,26 @@ export function attemptMatch(roomCode, playerId, cardRefs) {
             return { room, success: true, penalty: false };
         }
     }
- 
-    // count how many cards were taken from each non-attacker
-    const takenFrom = {};
-    for (const ref of cardRefs) {
-        takenFrom[ref.playerId] = (takenFrom[ref.playerId] || 0) + 1; 
-    }
- 
-    const attacker = room.players.find(p => p.id === playerId);
- 
+
     // replace non-attackers' lost cards from the deck
-    for (const targetId in takenFrom) {               // FIX: targetId not playerId
-        if (targetId === playerId) continue;           // skip attacker
-        const target = room.players.find(p => p.id === targetId);
-        for (let i = 0; i < takenFrom[targetId]; i++) {
+    for (const ownerId in byOwner) {
+        if (ownerId === playerId) continue; // attacker loses their cards, no replacement
+        const owner = room.players.find(p => p.id === ownerId);
+        const count = byOwner[ownerId].length;
+        for (let i = 0; i < count; i++) {
             if (room.deck.length === 0) reshuffleDeck(room);
             const newCard = room.deck.pop();
-            newCard.faceUp = false;
-            target.hand.push(newCard);
+            newCard.faceUp = false; // BUG3 FIX
+            owner.hand.push(newCard);
         }
-    }                                                  // FIX: loop ends here
- 
-    // win check and return are now OUTSIDE the loop
+    }
+
+    // check attacker win
     if (attacker.hand.length === 0) {
         room.phase = 'ended';
         room.winner = attacker.id;
     }
- 
+
     return { room, success: true, penalty: false };
 }
 
@@ -259,17 +260,14 @@ export function knock(roomCode, playerId) {
     const room = rooms[roomCode];
     const playerIndex = room.players.findIndex(p => p.id === playerId);
     if (playerIndex !== room.currentTurn) return {error: 'Not your turn'};
-
     room.phase = 'knocked';
     room.knockedBy = playerId;
-    return {room};
+    return { room };
 }
 
 export function advanceTurn(room) {
     room.currentTurn = (room.currentTurn + 1) % room.players.length;
-
     if (room.phase === 'knocked') {
-        const knocker = room.players.find(p => p.id === room.knockedBy);
         if (room.players[room.currentTurn].id === room.knockedBy) {
             room.phase = 'ended';
             room.winner = determineWinner(room);
@@ -282,12 +280,8 @@ function determineWinner(room) {
     for (const player of room.players) {
         const sum = player.hand.reduce((t, c) => t + c.value, 0);
         const cardCount = player.hand.length;
-        if(
-            !best||
-            sum < best.sum ||
-            (sum === best.sum && cardCount < best.cardCount)
-        ) {
-            best = {id: player.id, sum, cardCount};
+        if (!best || sum < best.sum || (sum === best.sum && cardCount < best.cardCount)) {
+            best = { id: player.id, sum, cardCount };
         }
     }
     return best.id;
@@ -296,6 +290,7 @@ function determineWinner(room) {
 function reshuffleDeck(room) {
     const topCard = room.discardPile.pop();
     room.deck = shuffle(room.discardPile);
+    room.deck.forEach(c => c.faceUp = false); // BUG3 FIX: all reshuffled cards face down
     room.discardPile = [topCard];
 }
 
@@ -307,6 +302,5 @@ export function removePlayer(roomCode, playerId) {
     return room;
 }
 
-export function getRoom(roomCode) {
-    return rooms[roomCode];
-}
+export function getRooms() { return rooms; }
+export function getRoom(roomCode) { return rooms[roomCode]; }

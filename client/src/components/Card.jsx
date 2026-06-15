@@ -71,8 +71,8 @@ export default function Card({ card, onClick, selected, disabled, small }) {
   }
 
   // --- FACE UP CARD ---
-  const symbol = SUIT_SYMBOLS[card.suit];
-  const color  = SUIT_COLORS[card.suit];
+const symbol = SUIT_SYMBOLS[card.suit?.toLowerCase()];
+const color  = SUIT_COLORS[card.suit?.toLowerCase()];
 
   return (
     <div

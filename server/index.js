@@ -6,7 +6,7 @@ import {
     createRoom, joinRoom, startGame, peekCards, drawCard, 
     swapDrawnCard, discardDrawnCard, peekOwnCard, peekOtherCard, 
     swapBlind, swapAndLook, attemptMatch, knock, advanceTurn, 
-    removePlayer, getRoom
+    removePlayer, getRooms, getRoom
 } from './gameState.js';
 
 const app = express();
@@ -34,9 +34,9 @@ function buildPlayerView(room, playerId) {
     };
 }
 
-function broadcastRoom(roomCode) {
+function broadcastRoom(room) {
     for (const player of room.players) {
-        io.to(player.id).emit('game-state', buildPlayerView(room, player.id));
+        io.to(player.id).emit('game_state', buildPlayerView(room, player.id));
     }
 }
 
@@ -54,7 +54,9 @@ io.on('connection', (socket) => {
  
     // Player joins an existing room using a room code.
     socket.on('join_room', ({ roomCode, playerName }) => {
+        console.log('join_room received:', roomCode, playerName);
         const result = joinRoom(roomCode, socket.id, playerName);
+        console.log('joinRoom result:', result);
         if (result.error) return socket.emit('error', result.error);
         socket.join(roomCode);
         broadcastRoom(result);
@@ -73,17 +75,35 @@ io.on('connection', (socket) => {
     socket.on('peek_cards', ({ roomCode, cardIndices }) => {
         const result = peekCards(roomCode, socket.id, cardIndices);
         if (result.error) return socket.emit('error', result.error);
- 
-        // build the list of cards this player peeked at
+
+        // always send this player their peeked cards privately
         const player = result.room.players.find(p => p.id === socket.id);
         const peekedCards = result.peekIndices.map(i => ({
-            index: i,       // which slot in their hand
-            card: player.hand[i]  // the actual card object
+            index: i,
+            card: player.hand[i]
         }));
- 
-        // send privately to just this player
         socket.emit('peek_result', { peekedCards });
-        broadcastRoom(result.room);
+
+        if (result.allDone) {
+            // send each player their own reveal cards, then broadcast the revealing phase
+            for (const p of result.room.players) {
+                const indices = result.room.peeksDone[p.id];
+                const cards = indices.map(i => ({ index: i, card: p.hand[i] }));
+                io.to(p.id).emit('reveal_peek', { peekedCards: cards });
+            }
+            broadcastRoom(result.room);
+        } else {
+            broadcastRoom(result.room);
+        }
+    });
+
+    // client calls this after the 4-second timer ends — host triggers game start
+    socket.on('finish_reveal', ({ roomCode }) => {
+        const room = getRoom(roomCode);
+        if (!room) return;
+        room.phase = 'playing';
+        room.currentTurn = 0;
+        broadcastRoom(room);
     });
  
 
@@ -91,7 +111,8 @@ io.on('connection', (socket) => {
     socket.on('draw_card', ({ roomCode }) => {
         const result = drawCard(roomCode, socket.id); // result contains drawnCard and updated room
         if (result.error) return socket.emit('error', result.error);
-        socket.emit('drawn_card', { card: result.drawnCard }); 
+        const cardToShow = {...result.drawnCard, faceUp: true};
+        socket.emit('drawn_card', { card: cardToShow }); 
         broadcastRoom(result.room); // update everyone's view of the room with the new drawn card in the player's hand
     });
  

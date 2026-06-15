@@ -1,8 +1,8 @@
-const SUITS = ['Hearts', 'Diamonds', 'Clubs', 'Spades'];
+const SUITS = ['hearts', 'diamonds', 'clubs', 'spades'];
 const RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
 
 export function getCardValue(card) {
-    if (card.rank === 'K' && card.suit === 'Hearts') return -1;
+    if (card.rank === 'K' && card.suit === 'hearts') return -1;
     if (card.rank === 'A') return 1;
     if (card.rank === 'J') return 11;
     if (card.rank === 'Q') return 12;
