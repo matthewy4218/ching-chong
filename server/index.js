@@ -11,6 +11,7 @@ import {
 
 const app = express();
 app.use(cors());
+app.get('/health', (req, res) => res.send('ok'));
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
